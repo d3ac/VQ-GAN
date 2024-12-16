@@ -13,7 +13,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_codebook_vectors', type=int, default=1024)
     parser.add_argument('--channels', type=int, nargs='+', default=[128, 128, 256, 256])
     parser.add_argument('--resolution', type=int, default=64)
-    parser.add_argument('--latent_size', type=int, default=8)
+    parser.add_argument('--latent_dim', type=int, default=8)
     parser.add_argument('--image_size', type=int, default=64)
     parser.add_argument('--image_channels', type=int, default=3)
     parser.add_argument('--beta', type=float, default=0.25)
