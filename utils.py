@@ -2,8 +2,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-
-
 class GroupNorm(nn.Module):
     def __init__(self, channels):
         super(GroupNorm, self).__init__()
