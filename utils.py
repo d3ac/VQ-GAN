@@ -81,6 +81,14 @@ class DownSampleBlock(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
+class UpSampleBlock(nn.Module):
+    def __init__(self, channels):
+        super(UpSampleBlock, self).__init__()
+        self.conv = nn.ConvTranspose2d(channels, channels, 4, 2, 1)
+
+    def forward(self, x):
+        return self.conv(x)
+
 class Swish(nn.Module):
     def __init__(self):
         super(Swish, self).__init__()
