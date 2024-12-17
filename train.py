@@ -68,17 +68,18 @@ if __name__ == '__main__':
         trange = tqdm.tqdm(range(len(train_dataset)))
         for i, imgs in zip(trange, train_dataset):
             imgs = imgs.to(device=args.device)
-            decoded, indices, rec_loss = vqgan(imgs)
+            decoded, indices, q_loss = vqgan(imgs)
             disc_real = discriminator(imgs)      # 真 -> 1
             disc_fake = discriminator(decoded)   # 假 -> -1
             mask_disc = vqgan.adopt_weight(args.disc_factor, epoch*steps_per_epoch+i, threshold=args.disc_start)
             
             # calculate vq_loss
-            perceptual_loss = LPIPS_model(decoded, imgs)
+            perceptual_loss = LPIPS_model(imgs, decoded)
+            rec_loss = torch.abs(imgs - decoded)
             perceptual_reconstruction_loss = (args.perceptual_loss_factor * perceptual_loss + args.rec_loss_factor * rec_loss).mean()
             gan_loss = - torch.mean(disc_fake) # maximize the probability of D(G(z)) = minimize -D(G(z))
             λ = vqgan.calculate_lambda(perceptual_reconstruction_loss, gan_loss)
-            vq_loss = perceptual_reconstruction_loss + rec_loss + mask_disc * λ * gan_loss # replace the L2 loss used in [63] for Lrec by a perceptual loss (in VQGAN paper)
+            vq_loss = perceptual_reconstruction_loss + q_loss + mask_disc * λ * gan_loss # replace the L2 loss used in [63] for Lrec by a perceptual loss (in VQGAN paper)
 
             # calculate discriminator loss
             discriminator_loss_real = torch.mean(F.relu(1.0 - disc_real))

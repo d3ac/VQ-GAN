@@ -27,6 +27,7 @@ class Encoder(nn.Module):
         layers.append(ResBlock(channels[-1], channels[-1]))
         layers.append(NonLocalBlock(channels[-1]))
         layers.append(ResBlock(channels[-1], channels[-1]))
+        layers.append(nn.GroupNorm(num_groups=32, num_channels=channels[-1], eps=1e-6, affine=True))
         layers.append(Swish())
         layers.append(nn.Conv2d(channels[-1], args.latent_dim, 3, 1, 1))
         self.model = nn.Sequential(*layers)
