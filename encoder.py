@@ -9,7 +9,7 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         channels = args.channels
         attn_resolutions = [16]
-        latent_dim = args.latent_dim
+        latent_size = args.latent_size
         resolution = args.resolution
         num_res_blocks = 2
         layers = [nn.Conv2d(args.image_channels, channels[0], 3, 1, 1)]
@@ -21,7 +21,7 @@ class Encoder(nn.Module):
                 in_channels = out_channels
                 if resolution in attn_resolutions:
                     layers.append(NonLocalBlock(in_channels))
-            if resolution > latent_dim:
+            if resolution > latent_size:
                 layers.append(DownSampleBlock(channels[i+1]))
                 resolution //= 2
         layers.append(ResBlock(channels[-1], channels[-1]))

@@ -6,25 +6,6 @@ import requests
 import tqdm
 import os
 
-URL_MAP = {
-    "vgg_lpips": "https://heibox.uni-heidelberg.de/f/607503859c864bc1b30b/?dl=1"
-}
-
-CKPT_MAP = {
-    "vgg_lpips": "vgg.pth"
-}
-
-def download(url, local_path, chunk_size=1024):
-    os.makedirs(os.path.split(local_path)[0], exist_ok=True)
-    with requests.get(url, stream=True) as r:
-        total_size = int(r.headers.get("content-length", 0))
-        with tqdm(total=total_size, unit="B", unit_scale=True) as pbar:
-            with open(local_path, "wb") as f:
-                for data in r.iter_content(chunk_size=chunk_size):
-                    if data:
-                        f.write(data)
-                        pbar.update(chunk_size)
-
 class ScalingLayer(nn.Module):
     def __init__(self):
         super(ScalingLayer, self).__init__()
@@ -70,14 +51,6 @@ class NetLinLayer(nn.Module):
             nn.Conv2d(in_channels, out_channels, 1, 1, 0, bias=False)
         )
 
-def get_ckpt_path(name, root):
-    assert name in URL_MAP
-    path = os.path.join(root, CKPT_MAP[name])
-    if not os.path.exists(path):
-        print(f"Downloading {name} model from {URL_MAP[name]} to {path}")
-        download(URL_MAP[name], path)
-    return path
-
 def norm_tensor(x):
     """
     Normalize images by their length to make them unit vector?
@@ -116,8 +89,7 @@ class LPIPS(nn.Module):
             param.requires_grad = False
 
     def load_from_pretrained(self, name="vgg_lpips"):
-        ckpt = get_ckpt_path(name, "./models")
-        self.load_state_dict(torch.load(ckpt, map_location=torch.device("cpu"), weights_only=True), strict=False)
+        self.load_state_dict(torch.load('models/vgg.pth', map_location=torch.device("cpu"), weights_only=True), strict=False)
 
     def forward(self, real_x, fake_x):
         features_real = self.vgg(self.scaling_layer(real_x))

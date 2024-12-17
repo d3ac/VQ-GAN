@@ -44,6 +44,9 @@ class VQGAN(nn.Module):
     
     @staticmethod
     def adopt_weight(disc_factor, i, threshold, value=0):
+        """
+        在训练过程中, 前期不计入discriminator的loss, 让生成器能够更好的学习到数据的分布，避免判别器过早的产生太强的对抗压力，使得训练不稳定
+        """
         if i < threshold:
             disc_factor = value
         return disc_factor
