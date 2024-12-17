@@ -64,9 +64,9 @@ if __name__ == '__main__':
     steps_per_epoch = len(train_dataset)
     best_loss = float('inf')
 
-    for epoch in range(args.epochs):
-        trange = tqdm.tqdm(range(len(train_dataset)))
-        for i, imgs in zip(trange, train_dataset):
+    trange = tqdm.trange(args.epochs)
+    for epoch in trange:
+        for i, imgs in enumerate(train_dataset):
             imgs = imgs.to(device=args.device)
             decoded, indices, q_loss = vqgan(imgs)
             disc_real = discriminator(imgs)      # 真 -> 1
@@ -99,3 +99,24 @@ if __name__ == '__main__':
             #print(decoded_images.min(), decoded_images.max(), 'here')
             real_fake_images = torch.cat((imgs.add(1).mul(0.5)[:4], decoded.add(1).mul(0.5)[:4]))
             vutils.save_image(real_fake_images, "eg.jpg", nrow=4)
+        
+        # evaluate
+        losses = []
+        for imgs in valid_dataset:
+            imgs = imgs.to(device=args.device)
+            decoded, indices, q_loss = vqgan(imgs)
+            disc_fake = discriminator(decoded)
+            mask_disc = vqgan.adopt_weight(args.disc_factor, epoch*steps_per_epoch+i, threshold=args.disc_start)
+            perceptual_loss = LPIPS_model(imgs, decoded)
+            rec_loss = torch.abs(imgs - decoded)
+            perceptual_reconstruction_loss = (args.perceptual_loss_factor * perceptual_loss + args.rec_loss_factor * rec_loss).mean()
+            gan_loss = - torch.mean(disc_fake)
+            λ = vqgan.calculate_lambda(perceptual_reconstruction_loss, gan_loss)
+            vq_loss = perceptual_reconstruction_loss + q_loss + mask_disc * λ * gan_loss
+            losses.append(vq_loss.cpu().detach().numpy().item())
+        mean_loss = np.mean(losses)
+        trange.set_postfix(loss=mean_loss)
+
+        if mean_loss < best_loss:
+            best_loss = mean_loss
+            torch.save(vqgan.state_dict(), 'vqgan.pth')
