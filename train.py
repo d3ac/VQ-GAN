@@ -94,6 +94,7 @@ if __name__ == '__main__':
 
             optimizer_vqgan.step()
             optimizer_discriminator.step()
+            trange.set_postfix(loss=vq_loss.cpu().detach().numpy().item())
         
         with torch.no_grad():
             #print(decoded_images.min(), decoded_images.max(), 'here')
