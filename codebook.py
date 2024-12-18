@@ -20,7 +20,7 @@ class Codebook(nn.Module):
         dist = torch.sum(z_flat**2, dim=1, keepdim=True) + torch.sum(self.embedding.weight**2, dim=1) - 2 * torch.matmul(z_flat, self.embedding.weight.t())
         indices = torch.argmin(dist, dim=1)
         z_q = self.embedding(indices).view(z.shape)
-        loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + torch.mean((z_q - z.detach()) ** 2) 
+        loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * torch.mean((z_q - z.detach()) ** 2) 
         z_q = z + (z_q - z).detach()
         z_q = z_q.permute(0, 3, 1, 2)
         return z_q, indices, loss
