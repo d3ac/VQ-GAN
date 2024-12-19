@@ -30,6 +30,48 @@ def configure_optimizers(vqgan, discriminator, args):
     optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=lr, eps=1e-8, betas=(args.beta1, args.beta2))
     return optimizer_vqgan, optimizer_discriminator
 
+def train(train_dataloader, model, discriminator, LPIPS_model, optimizer_vqgan, optimizer_discriminator, epoch, rank, args, steps_per_epoch):
+    model.train()
+    discriminator.train()
+
+    for i, (imgs, labels) in enumerate(train_dataloader):
+        imgs = imgs.cuda(rank, non_blocking=True)
+
+        decoded, indices, q_loss = model(imgs)
+        disc_real = discriminator(imgs)      # 真 -> 1
+        disc_fake = discriminator(decoded)   # 假 -> -1
+        mask_disc = model.adopt_weight(args.disc_factor, epoch*steps_per_epoch+i, threshold=args.disc_start)
+        
+        # calculate vq_loss
+        perceptual_loss = LPIPS_model(imgs, decoded)
+        rec_loss = torch.abs(imgs - decoded)
+        perceptual_reconstruction_loss = (args.perceptual_loss_factor * perceptual_loss + args.rec_loss_factor * rec_loss).mean()
+        gan_loss = - torch.mean(disc_fake) # maximize the probability of D(G(z)) = minimize -D(G(z))
+        λ = model.calculate_lambda(perceptual_reconstruction_loss, gan_loss)
+        vq_loss = perceptual_reconstruction_loss + q_loss + mask_disc * λ * gan_loss # replace the L2 loss used in [63] for Lrec by a perceptual loss (in VQGAN paper)
+
+        # calculate discriminator loss
+        discriminator_loss_real = torch.mean(F.relu(1.0 - disc_real))
+        discriminator_loss_fake = torch.mean(F.relu(1.0 + disc_fake)) # 改一下好一点, 应该乘一个系数0.5
+        discriminator_loss = mask_disc * 0.5 * (discriminator_loss_real + discriminator_loss_fake)
+
+        # update
+        optimizer_vqgan.zero_grad()
+        vq_loss.backward(retain_graph=True)
+        optimizer_discriminator.zero_grad()
+        discriminator_loss.backward()
+
+        optimizer_vqgan.step()
+        optimizer_discriminator.step()
+    
+    if rank == 0:
+        with torch.no_grad():
+            real_fake_images = torch.cat((imgs.add(1).mul(0.5)[:4], decoded.add(1).mul(0.5)[:4]))
+            vutils.save_image(real_fake_images, "eg.jpg", nrow=4)
+
+
+
+
 def main(rank: int, args):
     dist.init_process_group(backend='nccl', world_size=args.world_size, rank=rank)
     print(f"=> init GPU {rank}.")
@@ -64,10 +106,16 @@ def main(rank: int, args):
     test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True, sampler=test_sampler)
 
+    steps_per_epoch = len(train_dataloader)
+
     for epoch in range(args.epochs):
         train_sampler.set_epoch(epoch)
-        
+        test_sampler.set_epoch(epoch)
+        # TODO 加一个自适应的学习率调整
+        train(train_dataloader, model, discriminator, LPIPS_model, optimizer_vqgan, optimizer_discriminator, epoch, rank, args, steps_per_epoch)
 
+        if rank == 0:
+            torch.save(model.state_dict(), 'vqgan.pth')
 
 if __name__ == '__main__':
     # Parse arguments
@@ -97,90 +145,3 @@ if __name__ == '__main__':
     args.world_size = torch.cuda.device_count()
 
     mp.spawn(main, args=args, nprocs=args.world_size)
-
-    # dataset
-    trans = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((32, 32)),
-        transforms.Normalize((0.5,), (0.5,))
-    ])
-    train_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=True, download=True, transform=trans), batch_size=args.batch_size, shuffle=True, num_workers=7, pin_memory=True)
-    test_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=False, download=True, transform=trans), batch_size=args.batch_size, shuffle=True, num_workers=7, pin_memory=True)
-    
-    # model
-    vqgan = VQGAN(args).to(device=args.device)
-    discriminator = Discriminator(args).to(device=args.device)
-    discriminator.apply(weights_init)
-    LPIPS_model = LPIPS().eval().to(device=args.device)
-    optimizer_vqgan, optimizer_discriminator = configure_optimizers(vqgan, discriminator, args)
-
-    # training
-    steps_per_epoch = len(train_dataloader)
-    best_loss = float('inf')
-    
-    # learning decay
-    Milestones = [20, 50, 80]
-    lr_decay_vqgan = torch.optim.lr_scheduler.MultiStepLR(optimizer_vqgan, milestones=Milestones, gamma=0.1)
-    lr_decay_discriminator = torch.optim.lr_scheduler.MultiStepLR(optimizer_discriminator, milestones=Milestones, gamma=0.1)
-
-    trange = tqdm.trange(args.epochs)
-    for epoch in trange:
-        trange2 = tqdm.tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.epochs}", leave=False)
-        for i, (imgs, labels) in enumerate(trange2):
-            imgs = imgs.to(device=args.device)
-            decoded, indices, q_loss = vqgan(imgs)
-            disc_real = discriminator(imgs)      # 真 -> 1
-            disc_fake = discriminator(decoded)   # 假 -> -1
-            mask_disc = vqgan.adopt_weight(args.disc_factor, epoch*steps_per_epoch+i, threshold=args.disc_start)
-            
-            # calculate vq_loss
-            perceptual_loss = LPIPS_model(imgs, decoded)
-            rec_loss = torch.abs(imgs - decoded)
-            perceptual_reconstruction_loss = (args.perceptual_loss_factor * perceptual_loss + args.rec_loss_factor * rec_loss).mean()
-            gan_loss = - torch.mean(disc_fake) # maximize the probability of D(G(z)) = minimize -D(G(z))
-            λ = vqgan.calculate_lambda(perceptual_reconstruction_loss, gan_loss)
-            vq_loss = perceptual_reconstruction_loss + q_loss + mask_disc * λ * gan_loss # replace the L2 loss used in [63] for Lrec by a perceptual loss (in VQGAN paper)
-
-            # calculate discriminator loss
-            discriminator_loss_real = torch.mean(F.relu(1.0 - disc_real))
-            discriminator_loss_fake = torch.mean(F.relu(1.0 + disc_fake)) # 改一下好一点, 应该乘一个系数0.5
-            discriminator_loss = mask_disc * 0.5 * (discriminator_loss_real + discriminator_loss_fake)
-
-            # update
-            optimizer_vqgan.zero_grad()
-            vq_loss.backward(retain_graph=True)
-            optimizer_discriminator.zero_grad()
-            discriminator_loss.backward()
-
-            optimizer_vqgan.step()
-            optimizer_discriminator.step()
-            trange2.set_postfix(loss=vq_loss.cpu().detach().numpy().item())
-        
-        with torch.no_grad():
-            #print(decoded_images.min(), decoded_images.max(), 'here')
-            real_fake_images = torch.cat((imgs.add(1).mul(0.5)[:4], decoded.add(1).mul(0.5)[:4]))
-            vutils.save_image(real_fake_images, "eg.jpg", nrow=4)
-        
-        lr_decay_vqgan.step()
-        lr_decay_discriminator.step()
-        
-        # evaluate
-        losses = []
-        for imgs, labels in tqdm.tqdm(test_dataloader, desc="Evaluating", leave=False):
-            imgs = imgs.to(device=args.device)
-            decoded, indices, q_loss = vqgan(imgs)
-            disc_fake = discriminator(decoded)
-            mask_disc = vqgan.adopt_weight(args.disc_factor, epoch*steps_per_epoch+i, threshold=args.disc_start)
-            perceptual_loss = LPIPS_model(imgs, decoded)
-            rec_loss = torch.abs(imgs - decoded)
-            perceptual_reconstruction_loss = (args.perceptual_loss_factor * perceptual_loss + args.rec_loss_factor * rec_loss).mean()
-            gan_loss = - torch.mean(disc_fake)
-            λ = vqgan.calculate_lambda(perceptual_reconstruction_loss, gan_loss)
-            vq_loss = perceptual_reconstruction_loss + q_loss + mask_disc * λ * gan_loss
-            losses.append(vq_loss.cpu().detach().numpy().item())
-        mean_loss = np.mean(losses)
-        trange.set_postfix(loss=mean_loss)
-
-        if mean_loss < best_loss:
-            best_loss = mean_loss
-            torch.save(vqgan.state_dict(), 'vqgan.pth')
