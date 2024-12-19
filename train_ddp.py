@@ -12,6 +12,9 @@ from torchvision import utils as vutils
 from torch.utils.data import DataLoader
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
+import torch.multiprocessing as mp
+import torch.distributed as dist
+import torch.backends.cudnn as cudnn
 import os
 
 def configure_optimizers(vqgan, discriminator, args):
@@ -27,6 +30,45 @@ def configure_optimizers(vqgan, discriminator, args):
     optimizer_discriminator = torch.optim.Adam(discriminator.parameters(), lr=lr, eps=1e-8, betas=(args.beta1, args.beta2))
     return optimizer_vqgan, optimizer_discriminator
 
+def main(rank: int, args):
+    dist.init_process_group(backend='nccl', world_size=args.world_size, rank=rank)
+    print(f"=> init GPU {rank}.")
+    torch.cuda.set_device(rank)
+    batch_size = args.batch_size // args.world_size
+
+    model = VQGAN(args).cuda(rank)
+    model = nn.parallel.DistributedDataParallel(model, device_ids=[rank])
+    
+    discriminator = Discriminator(args).cuda(rank)
+    discriminator.apply(weights_init)
+    discriminator = nn.parallel.DistributedDataParallel(discriminator, device_ids=[rank])
+
+    LPIPS_model = LPIPS().eval().cuda(rank)
+
+    # criterion = nn.CrossEntropyLoss().cuda(rank)
+    optimizer_vqgan, optimizer_discriminator = configure_optimizers(model, discriminator, args)
+    
+    cudnn.benchmark = True
+
+    # dataset
+    trans = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((32, 32)),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
+    train_dataset = datasets.CIFAR10(root=args.path, train=True, download=True, transform=trans)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True, sampler=train_sampler)
+    
+    test_dataset = datasets.CIFAR10(root=args.path, train=False, download=True, transform=trans)
+    test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset)
+    test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True, sampler=test_sampler)
+
+    for epoch in range(args.epochs):
+        train_sampler.set_epoch(epoch)
+        
+
+
 if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser()
@@ -40,7 +82,7 @@ if __name__ == '__main__':
     parser.add_argument('--image_channels', type=int, default=3)
     parser.add_argument('--beta', type=float, default=0.25)
     parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--beta1', type=float, default=0.5)
@@ -51,6 +93,10 @@ if __name__ == '__main__':
     parser.add_argument('--perceptual_loss_factor', type=float, default=0.1)
     parser.add_argument('--path', type=str, default='/home/d3ac/Desktop/dataset')
     args = parser.parse_args()
+    
+    args.world_size = torch.cuda.device_count()
+
+    mp.spawn(main, args=args, nprocs=args.world_size)
 
     # dataset
     trans = transforms.Compose([
