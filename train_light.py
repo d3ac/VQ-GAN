@@ -28,6 +28,8 @@ class LitModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         # get optimizer
         optimizer_vqgan, optimizer_discriminator = self.optimizers()
+        # get scheduler
+        scheduler_vqgan, scheduler_discriminator = self.lr_schedulers()
 
         x, _ = batch
         decoded, indices, q_loss = self.vqgan(x)
@@ -53,16 +55,33 @@ class LitModel(L.LightningModule):
         self.manual_backward(vq_loss, retain_graph=True)
 
         optimizer_discriminator.zero_grad()
-        self.manual_backward(discriminator_loss, retain_graph=True)
+        self.manual_backward(discriminator_loss)
 
         optimizer_vqgan.step()
         optimizer_discriminator.step()
 
+        if self.global_step % self.args.dataloader_len == 0:
+            scheduler_vqgan.step()
+            scheduler_discriminator.step()
+
         self.log("vq_loss", vq_loss, prog_bar=True)
         self.log("disc_loss", discriminator_loss, prog_bar=True)
+    
+    def validation_step(self, batch, batch_idx):
+        with torch.enable_grad():
+            x, _ = batch
+            decoded, indices, q_loss = self.vqgan(x)
+            perceptual_loss = self.lpips(x, decoded)
+            rec_loss = torch.abs(x - decoded)
+            perceptual_reconstruction_loss = (self.args.perceptual_loss_factor * perceptual_loss + self.args.rec_loss_factor * rec_loss).mean()
+            gan_loss = - torch.mean(self.discriminator(decoded))
+            λ = self.vqgan.calculate_lambda(perceptual_reconstruction_loss, gan_loss)
+            vq_loss = perceptual_reconstruction_loss + q_loss + λ * gan_loss
+            self.log("val_vq_loss", vq_loss, prog_bar=True)
 
     def configure_optimizers(self):
         lr = self.args.learning_rate
+        # optimizer
         optimizer_vqgan = torch.optim.Adam(
             list(self.vqgan.encoder.parameters()) +
             list(self.vqgan.decoder.parameters()) +
@@ -72,7 +91,10 @@ class LitModel(L.LightningModule):
             lr=lr, eps=1e-8, betas=(self.args.beta1, self.args.beta2)
         )
         optimizer_discriminator = torch.optim.Adam(self.discriminator.parameters(), lr=lr, eps=1e-8, betas=(self.args.beta1, self.args.beta2))
-        return optimizer_vqgan, optimizer_discriminator
+        # scheduler
+        scheduler_vqgan = torch.optim.lr_scheduler.MultiStepLR(optimizer_vqgan, milestones=self.args.Milestones, gamma=0.4)
+        scheduler_discriminator = torch.optim.lr_scheduler.MultiStepLR(optimizer_discriminator, milestones=self.args.Milestones, gamma=0.4)
+        return ([optimizer_vqgan, optimizer_discriminator], [scheduler_vqgan, scheduler_discriminator])
 
 if __name__ == '__main__':
     # Parse arguments
@@ -88,11 +110,12 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=0.25)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--beta1', type=float, default=0.5)
     parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--disc_start', type=int, default=3000)
+    parser.add_argument('--Milestones', type=int, nargs='+', default=[50, 100, 150, 200, 250])
     parser.add_argument('--disc_factor', type=float, default=0.1)
     parser.add_argument('--rec_loss_factor', type=float, default=1)
     parser.add_argument('--perceptual_loss_factor', type=float, default=0.1)
@@ -111,6 +134,7 @@ if __name__ == '__main__':
     ])
     train_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=True, download=True, transform=trans), batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True)
     valid_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=False, download=True, transform=trans), batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True)
+    args.dataloader_len = len(train_dataloader)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
     valid_dataloader = fabric.setup_dataloaders(valid_dataloader)
 
