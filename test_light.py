@@ -12,6 +12,7 @@ from torchvision import utils as vutils
 from torch.utils.data import DataLoader
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
 import lightning as L
 import os
 
@@ -67,6 +68,10 @@ class LitModel(L.LightningModule):
         self.log("vq_loss", vq_loss, prog_bar=True)
         self.log("disc_loss", discriminator_loss, prog_bar=True)
     
+    def forward(self, x):
+        decoded, indices, q_loss = self.vqgan(x)
+        return decoded
+
     def validation_step(self, batch, batch_idx):
         with torch.enable_grad():
             x, _ = batch
@@ -109,7 +114,7 @@ if __name__ == '__main__':
     parser.add_argument('--image_channels', type=int, default=3)
     parser.add_argument('--beta', type=float, default=0.25)
     parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--beta1', type=float, default=0.5)
@@ -119,7 +124,7 @@ if __name__ == '__main__':
     parser.add_argument('--disc_factor', type=float, default=0.1)
     parser.add_argument('--rec_loss_factor', type=float, default=1)
     parser.add_argument('--perceptual_loss_factor', type=float, default=0.1)
-    parser.add_argument('--path', type=str, default='/mnt/Datasets/CIFAR10')
+    parser.add_argument('--path', type=str, default='/home/d3ac/Desktop/dataset')
     args = parser.parse_args()
 
     # Fabric accelerates
@@ -139,7 +144,35 @@ if __name__ == '__main__':
     valid_dataloader = fabric.setup_dataloaders(valid_dataloader)
 
     # model
-    model = LitModel(VQGAN(args), Discriminator(args).apply(weights_init), LPIPS().eval(), args)
+    model = LitModel.load_from_checkpoint('lightning_logs/epoch=99-step=39200.ckpt', vqgan=VQGAN(args), discriminator=Discriminator(args).apply(weights_init), lpips=LPIPS().eval(), args=args)
     trainer = L.Trainer(max_epochs=args.epochs, strategy='ddp_find_unused_parameters_true')
-    trainer.fit(model, train_dataloader, valid_dataloader)
+    model.eval()
 
+    # test
+    for test_imgs, _ in valid_dataloader:
+        test_decoded = model(test_imgs).cpu().detach()
+        break
+
+    for train_imgs, _ in train_dataloader:
+        train_decoded = model(train_imgs).cpu().detach()
+        break
+
+    fig, axes = plt.subplots(4, args.batch_size, figsize=(args.batch_size * 4, 4 * 4))
+    for j in range(args.batch_size):
+        axes[0, j].imshow(test_decoded[j].permute(1, 2, 0).cpu().numpy(), cmap='gray')
+        axes[0, j].axis('off')
+
+        axes[1, j].imshow(test_imgs[j].permute(1, 2, 0).cpu().numpy(), cmap='gray')
+        axes[1, j].axis('off')
+
+        axes[2, j].imshow(train_decoded[j].permute(1, 2, 0).cpu().numpy(), cmap='gray')
+        axes[2, j].axis('off')
+        
+        axes[3, j].imshow(train_imgs[j].permute(1, 2, 0).cpu().numpy(), cmap='gray')
+        axes[3, j].axis('off')
+    
+    axes[0, 0].set_title('Test Decoded')
+    axes[1, 0].set_title('Test Original')
+    axes[2, 0].set_title('Train Decoded')
+    axes[3, 0].set_title('Train Original')
+    plt.show()
