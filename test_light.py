@@ -125,6 +125,7 @@ if __name__ == '__main__':
     parser.add_argument('--rec_loss_factor', type=float, default=1)
     parser.add_argument('--perceptual_loss_factor', type=float, default=0.1)
     parser.add_argument('--path', type=str, default='/home/d3ac/Desktop/dataset')
+    parser.add_argument('--ckpt_path', type=str, default="lightning_loss/version_0/checkpoints/epoch=99-step=39200.ckpt")
     args = parser.parse_args()
 
     # Fabric accelerates
@@ -137,14 +138,14 @@ if __name__ == '__main__':
         transforms.Resize((32, 32)),
         transforms.Normalize((0.5,), (0.5,))
     ])
-    train_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=True, download=True, transform=trans), batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True)
-    valid_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=False, download=True, transform=trans), batch_size=args.batch_size, shuffle=False, num_workers=7, pin_memory=True)
+    train_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=True, download=True, transform=trans), batch_size=args.batch_size, shuffle=True, num_workers=7, pin_memory=True)
+    valid_dataloader = DataLoader(datasets.CIFAR10(root=args.path, train=False, download=True, transform=trans), batch_size=args.batch_size, shuffle=True, num_workers=7, pin_memory=True)
     args.dataloader_len = len(train_dataloader)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
     valid_dataloader = fabric.setup_dataloaders(valid_dataloader)
 
     # model
-    model = LitModel.load_from_checkpoint('lightning_logs/epoch=99-step=39200.ckpt', vqgan=VQGAN(args), discriminator=Discriminator(args).apply(weights_init), lpips=LPIPS().eval(), args=args)
+    model = LitModel.load_from_checkpoint(args.ckpt_path, vqgan=VQGAN(args), discriminator=Discriminator(args).apply(weights_init), lpips=LPIPS().eval(), args=args)
     trainer = L.Trainer(max_epochs=args.epochs, strategy='ddp_find_unused_parameters_true')
     model.eval()
 
@@ -171,8 +172,8 @@ if __name__ == '__main__':
         axes[3, j].imshow(train_imgs[j].permute(1, 2, 0).cpu().numpy(), cmap='gray')
         axes[3, j].axis('off')
     
-    axes[0, 0].set_title('Test Decoded')
-    axes[1, 0].set_title('Test Original')
-    axes[2, 0].set_title('Train Decoded')
-    axes[3, 0].set_title('Train Original')
+    axes[0, 0].set_title('Test Decoded', fontsize=20)
+    axes[1, 0].set_title('Test Original', fontsize=20)
+    axes[2, 0].set_title('Train Decoded', fontsize=20)
+    axes[3, 0].set_title('Train Original', fontsize=20)
     plt.show()

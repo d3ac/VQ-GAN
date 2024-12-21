@@ -73,9 +73,9 @@ if __name__ == '__main__':
         axes[3, j].imshow(train_imgs[j].permute(1, 2, 0).cpu().numpy(), cmap='gray')
         axes[3, j].axis('off')
     
-    axes[0, 0].set_title('Test Decoded')
-    axes[1, 0].set_title('Test Original')
-    axes[2, 0].set_title('Train Decoded')
-    axes[3, 0].set_title('Train Original')
+    axes[0, 0].set_title('Test Decoded', fontsize=20)
+    axes[1, 0].set_title('Test Original', fontsize=20)
+    axes[2, 0].set_title('Train Decoded', fontsize=20)
+    axes[3, 0].set_title('Train Original', fontsize=20)
     plt.show()
     
